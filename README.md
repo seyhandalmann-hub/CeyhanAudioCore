@@ -1,4 +1,6 @@
 # CeyhanAudioCore (CAC) 🚀
+[![GitHub Issues](https://img.shields.io/github/issues/istek26/CeyhanAudioCore?style=for-the-badge)](https://github.com/istek26/CeyhanAudioCore/issues)
+[![Contribute](https://img.shields.io/badge/Contributions-Welcome-brightgreen?style=for-the-badge)](https://github.com/istek26/CeyhanAudioCore/pulls)
 
 CeyhanAudioCore is a lightweight, high-performance, open-source audio copyright and fingerprinting kernel written in C++17. It continuously scans audio files, processes raw sound waves, and generates a unique mathematical digital fingerprint (`CAC-ID`) to protect intellectual property and detect copyright infringement.
 
