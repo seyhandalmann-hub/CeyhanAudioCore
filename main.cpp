@@ -11,17 +11,18 @@
 // FOUNDER: Eymen Ceyhan (2026)
 // =================================================================
 
-struct ID3v1Tag {
+struct AudioTag {
     std::string title;
     std::string artist;
     std::string album;
     std::string year;
+    std::string version;
     bool found = false;
 };
 
 class CeyhanAudioCore {
 public:
-    std::string version = "1.5.0-Production";
+    std::string version = "1.6.0-Production";
 
     void showBanner() {
         std::cout << "\033[1;32m";
@@ -32,26 +33,100 @@ public:
         std::cout << "\033[0m";
     }
 
-    ID3v1Tag parseID3v1(const std::vector<char>& audioData) {
-        ID3v1Tag tag;
-        if (audioData.size() < 128) return tag;
+    std::string cleanString(const std::vector<char>& data, size_t start, size_t len) {
+        std::string s(data.begin() + start, data.begin() + start + len);
+        s.erase(std::find(s.begin(), s.end(), '\0'), s.end());
+        while (!s.empty() && (s.back() == ' ' || s.back() == '\r')) s.pop_back();
+        return s;
+    }
 
-        size_t offset = audioData.size() - 128;
-        if (audioData[offset] != 'T' || audioData[offset+1] != 'A' || audioData[offset+2] != 'G')
+    AudioTag parseID3v2(const std::vector<char>& data) {
+        AudioTag tag;
+        if (data.size() < 10) return tag;
+        if (data[0] != 'I' || data[1] != 'D' || data[2] != '3') return tag;
+
+        uint8_t major = data[3];
+        // syncsafe integer for total tag size
+        uint32_t tagSize = ((uint8_t)data[6] << 21) | ((uint8_t)data[7] << 14) |
+                           ((uint8_t)data[8] << 7)  |  (uint8_t)data[9];
+
+        tag.version = "ID3v2." + std::to_string(major);
+        size_t pos = 10;
+        size_t end = std::min((size_t)(10 + tagSize), data.size());
+
+        while (pos + 10 < end) {
+            std::string frameID(data.begin() + pos, data.begin() + pos + 4);
+            if (frameID[0] == '\0') break;
+
+            uint32_t frameSize;
+            if (major >= 4) {
+                frameSize = ((uint8_t)data[pos+4] << 21) | ((uint8_t)data[pos+5] << 14) |
+                            ((uint8_t)data[pos+6] << 7)  |  (uint8_t)data[pos+7];
+            } else {
+                frameSize = ((uint8_t)data[pos+4] << 24) | ((uint8_t)data[pos+5] << 16) |
+                            ((uint8_t)data[pos+6] << 8)  |  (uint8_t)data[pos+7];
+            }
+
+            pos += 10;
+            if (pos + frameSize > end || frameSize == 0) break;
+
+            uint8_t encoding = (uint8_t)data[pos];
+            std::string value;
+
+            if (encoding == 0x01 || encoding == 0x02) {
+                // UTF-16: convert to UTF-8
+                size_t start = pos + 1;
+                // skip BOM if present
+                if (start + 1 < pos + frameSize &&
+                    (uint8_t)data[start] == 0xFF && (uint8_t)data[start+1] == 0xFE)
+                    start += 2;
+                for (size_t i = start; i + 1 < pos + frameSize; i += 2) {
+                    uint16_t cp = (uint8_t)data[i] | ((uint8_t)data[i+1] << 8);
+                    if (cp == 0) break;
+                    if (cp < 0x80) {
+                        value += (char)cp;
+                    } else if (cp < 0x800) {
+                        value += (char)(0xC0 | (cp >> 6));
+                        value += (char)(0x80 | (cp & 0x3F));
+                    } else {
+                        value += (char)(0xE0 | (cp >> 12));
+                        value += (char)(0x80 | ((cp >> 6) & 0x3F));
+                        value += (char)(0x80 | (cp & 0x3F));
+                    }
+                }
+            } else {
+                // Latin-1 or UTF-8
+                value = std::string(data.begin() + pos + 1, data.begin() + pos + frameSize);
+                value.erase(std::find(value.begin(), value.end(), '\0'), value.end());
+            }
+            while (!value.empty() && (value.back() == ' ' || value.back() == '\r')) value.pop_back();
+
+            if      (frameID == "TIT2") tag.title  = value;
+            else if (frameID == "TPE1") tag.artist = value;
+            else if (frameID == "TALB") tag.album  = value;
+            else if (frameID == "TDRC" || frameID == "TYER") tag.year = value;
+
+            pos += frameSize;
+        }
+
+        tag.found = !tag.title.empty() || !tag.artist.empty();
+        return tag;
+    }
+
+    AudioTag parseID3v1(const std::vector<char>& data) {
+        AudioTag tag;
+        if (data.size() < 128) return tag;
+
+        size_t offset = data.size() - 128;
+        if (data[offset] != 'T' || data[offset+1] != 'A' || data[offset+2] != 'G')
             return tag;
 
-        auto readField = [&](size_t start, size_t len) -> std::string {
-            std::string s(audioData.begin() + start, audioData.begin() + start + len);
-            s.erase(std::find(s.begin(), s.end(), '\0'), s.end());
-            while (!s.empty() && s.back() == ' ') s.pop_back();
-            return s;
-        };
-
-        tag.found  = true;
-        tag.title  = readField(offset + 3,  30);
-        tag.artist = readField(offset + 33, 30);
-        tag.album  = readField(offset + 63, 30);
-        tag.year   = readField(offset + 93, 4);
+        tag.found   = true;
+        tag.version = "ID3v1";
+        tag.title   = cleanString(data, offset + 3,  30);
+        tag.artist  = cleanString(data, offset + 33, 30);
+        tag.album   = cleanString(data, offset + 63, 30);
+        tag.year    = cleanString(data, offset + 93, 4);
         return tag;
     }
 
@@ -83,15 +158,17 @@ public:
         std::cout << "\033[1;32m[Success] Audio successfully loaded!\033[0m" << std::endl;
         std::cout << "[Info] Total Audio Size: " << audioData.size() << " bytes." << std::endl;
 
-        ID3v1Tag tag = parseID3v1(audioData);
+        AudioTag tag = parseID3v2(audioData);
+        if (!tag.found) tag = parseID3v1(audioData);
+
         if (tag.found) {
-            std::cout << "\033[1;34m--- ID3v1 METADATA ---\033[0m" << std::endl;
+            std::cout << "\033[1;34m--- METADATA (" << tag.version << ") ---\033[0m" << std::endl;
             std::cout << "[Title]  " << (tag.title.empty()  ? "N/A" : tag.title)  << std::endl;
             std::cout << "[Artist] " << (tag.artist.empty() ? "N/A" : tag.artist) << std::endl;
             std::cout << "[Album]  " << (tag.album.empty()  ? "N/A" : tag.album)  << std::endl;
             std::cout << "[Year]   " << (tag.year.empty()   ? "N/A" : tag.year)   << std::endl;
         } else {
-            std::cout << "[Metadata] No ID3v1 tag found in this file." << std::endl;
+            std::cout << "[Metadata] No ID3 tag found in this file." << std::endl;
         }
 
         std::cout << "\033[1;36m--- COPYRIGHT FINGERPRINTING ---\033[0m" << std::endl;
